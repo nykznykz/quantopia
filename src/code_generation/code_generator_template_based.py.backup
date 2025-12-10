@@ -1,0 +1,428 @@
+"""Code generator for converting strategy metadata to executable Python classes."""
+
+from typing import Dict, Any, List
+import re
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class CodeGenerator:
+    """Generates executable Python code from strategy metadata."""
+
+    def __init__(self):
+        """Initialize code generator."""
+        pass
+
+    def generate_strategy_class(self, strategy_metadata: Dict[str, Any]) -> str:
+        """Generate complete Python class from strategy metadata.
+
+        Args:
+            strategy_metadata: Strategy dict from LLM
+
+        Returns:
+            Python code as string
+        """
+        # Extract metadata
+        strategy_name = strategy_metadata['strategy_name']
+        class_name = self._to_class_name(strategy_name)
+        strategy_type = strategy_metadata.get('strategy_type', 'unknown')
+        description = strategy_metadata.get('hypothesis', '')
+        indicators = strategy_metadata.get('indicators', [])
+        entry_rules = strategy_metadata.get('entry_rules', [])
+        exit_rules = strategy_metadata.get('exit_rules', [])
+        stop_loss = strategy_metadata.get('stop_loss', {'type': 'none'})
+        take_profit = strategy_metadata.get('take_profit', {'type': 'none'})
+
+        # Generate imports
+        imports = self._generate_imports(indicators)
+
+        # Generate class definition
+        class_def = self._generate_class_definition(class_name, strategy_type, description)
+
+        # Generate __init__ method
+        init_method = self._generate_init_method(indicators)
+
+        # Generate calculate_indicators method
+        calc_indicators = self._generate_calculate_indicators(indicators)
+
+        # Generate should_enter method
+        should_enter = self._generate_should_enter(entry_rules)
+
+        # Generate should_exit method
+        should_exit = self._generate_should_exit(exit_rules)
+
+        # Generate stop_loss method
+        stop_loss_method = self._generate_stop_loss_method(stop_loss)
+
+        # Generate take_profit method
+        take_profit_method = self._generate_take_profit_method(take_profit)
+
+        # Combine all parts
+        code_parts = [
+            imports,
+            "",
+            class_def,
+            init_method,
+            calc_indicators,
+            should_enter,
+            should_exit,
+            stop_loss_method,
+            take_profit_method
+        ]
+
+        code = "\n\n".join(code_parts)
+
+        logger.info(f"Generated code for strategy: {class_name}")
+
+        return code
+
+    def _to_class_name(self, strategy_name: str) -> str:
+        """Convert strategy name to valid Python class name.
+
+        Args:
+            strategy_name: Human-readable strategy name
+
+        Returns:
+            Valid Python class name (PascalCase)
+        """
+        # Remove special characters and split on spaces/underscores
+        words = re.findall(r'[A-Za-z0-9]+', strategy_name)
+
+        # Convert to PascalCase
+        class_name = ''.join(word.capitalize() for word in words)
+
+        # Ensure it starts with a letter
+        if class_name and not class_name[0].isalpha():
+            class_name = 'Strategy' + class_name
+
+        # Add suffix if needed
+        if not class_name.endswith('Strategy'):
+            class_name += 'Strategy'
+
+        return class_name
+
+    def _generate_imports(self, indicators: List[Dict]) -> str:
+        """Generate import statements.
+
+        Args:
+            indicators: List of indicator dicts
+
+        Returns:
+            Import statement block
+        """
+        imports = [
+            '"""Auto-generated trading strategy."""',
+            '',
+            'import sys',
+            'import os',
+            'import pandas as pd',
+            'import numpy as np',
+            'from typing import Dict, Any, Optional',
+            '',
+            '# Add paths',
+            'sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))',
+            'sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../simulated_exchange/src"))',
+            '',
+            'from src.code_generation.strategy_base import BaseStrategy',
+            'from src.indicators import INDICATOR_REGISTRY',
+        ]
+
+        return '\n'.join(imports)
+
+    def _generate_class_definition(
+        self,
+        class_name: str,
+        strategy_type: str,
+        description: str
+    ) -> str:
+        """Generate class definition and docstring.
+
+        Args:
+            class_name: Python class name
+            strategy_type: Strategy type
+            description: Strategy hypothesis/description
+
+        Returns:
+            Class definition code
+        """
+        docstring = f'''"""
+    {class_name}
+
+    Type: {strategy_type}
+
+    Hypothesis:
+    {description}
+    """'''
+
+        return f'''class {class_name}(BaseStrategy):
+{docstring}'''
+
+    def _generate_init_method(self, indicators: List[Dict]) -> str:
+        """Generate __init__ method.
+
+        Args:
+            indicators: List of indicator dicts
+
+        Returns:
+            __init__ method code
+        """
+        lines = [
+            '    def __init__(self, exchange, price_feed, symbol, initial_capital=10000.0):',
+            '        """Initialize strategy."""',
+            '        super().__init__(exchange, price_feed, symbol, initial_capital)',
+            '',
+            '        # Initialize indicator instances'
+        ]
+
+        for indicator in indicators:
+            name = indicator.get('name')
+            params = indicator.get('params', {})
+
+            if params:
+                params_str = ', '.join(f'{k}={repr(v)}' for k, v in params.items())
+                lines.append(f"        self.{name.lower()} = INDICATOR_REGISTRY['{name}']({params_str})")
+            else:
+                lines.append(f"        self.{name.lower()} = INDICATOR_REGISTRY['{name}']()")
+
+        return '\n'.join(lines)
+
+    def _generate_calculate_indicators(self, indicators: List[Dict]) -> str:
+        """Generate calculate_indicators method.
+
+        Args:
+            indicators: List of indicator dicts
+
+        Returns:
+            calculate_indicators method code
+        """
+        lines = [
+            '    def calculate_indicators(self, data: pd.DataFrame) -> Dict[str, Any]:',
+            '        """Calculate all strategy indicators."""',
+            '        indicators = {}',
+            '',
+            '        # Calculate each indicator'
+        ]
+
+        for indicator in indicators:
+            name = indicator.get('name')
+            name_lower = name.lower()
+
+            # Handle indicators that return DataFrames vs Series
+            multi_output_indicators = ['MACD', 'BollingerBands', 'KeltnerChannels',
+                                      'Stochastic', 'ADX', 'MarketRegime', 'DonchianChannels']
+
+            if name in multi_output_indicators:
+                lines.append(f'        {name_lower}_data = self.{name_lower}.calculate(data)')
+                lines.append(f'        if len({name_lower}_data) > 0:')
+
+                # Get the last row of the DataFrame
+                if name == 'MACD':
+                    lines.append(f"            indicators['{name_lower}_macd'] = {name_lower}_data['macd'].iloc[-1]")
+                    lines.append(f"            indicators['{name_lower}_signal'] = {name_lower}_data['signal'].iloc[-1]")
+                    lines.append(f"            indicators['{name_lower}_histogram'] = {name_lower}_data['histogram'].iloc[-1]")
+                elif name == 'Stochastic':
+                    lines.append(f"            indicators['{name_lower}_k'] = {name_lower}_data['k'].iloc[-1]")
+                    lines.append(f"            indicators['{name_lower}_d'] = {name_lower}_data['d'].iloc[-1]")
+                elif name == 'ADX':
+                    lines.append(f"            indicators['{name_lower}'] = {name_lower}_data['adx'].iloc[-1]")
+                    lines.append(f"            indicators['{name_lower}_plus_di'] = {name_lower}_data['plus_di'].iloc[-1]")
+                    lines.append(f"            indicators['{name_lower}_minus_di'] = {name_lower}_data['minus_di'].iloc[-1]")
+                elif name in ['BollingerBands', 'KeltnerChannels', 'DonchianChannels']:
+                    lines.append(f"            indicators['{name_lower}_upper'] = {name_lower}_data['upper'].iloc[-1]")
+                    lines.append(f"            indicators['{name_lower}_middle'] = {name_lower}_data['middle'].iloc[-1]")
+                    lines.append(f"            indicators['{name_lower}_lower'] = {name_lower}_data['lower'].iloc[-1]")
+                elif name == 'MarketRegime':
+                    lines.append(f"            indicators['trend_strength'] = {name_lower}_data['trend_strength'].iloc[-1]")
+                    lines.append(f"            indicators['volatility_regime'] = {name_lower}_data['volatility_regime'].iloc[-1]")
+                    lines.append(f"            indicators['volume_regime'] = {name_lower}_data['volume_regime'].iloc[-1]")
+
+                lines.append('        else:')
+                lines.append('            pass  # Not enough data')
+            else:
+                # Single-value indicators
+                lines.append(f'        {name_lower}_values = self.{name_lower}.calculate(data)')
+                lines.append(f'        if len({name_lower}_values) > 0:')
+                lines.append(f"            indicators['{name_lower}'] = {name_lower}_values.iloc[-1]")
+                lines.append('        else:')
+                lines.append(f"            indicators['{name_lower}'] = None")
+
+            lines.append('')
+
+        lines.append('        # Store current price')
+        lines.append("        if 'close' in data.columns and len(data) > 0:")
+        lines.append("            indicators['current_price'] = data['close'].iloc[-1]")
+        lines.append('')
+        lines.append('        return indicators')
+
+        return '\n'.join(lines)
+
+    def _generate_should_enter(self, entry_rules: List[str]) -> str:
+        """Generate should_enter method.
+
+        Args:
+            entry_rules: List of entry condition strings
+
+        Returns:
+            should_enter method code
+        """
+        lines = [
+            '    def should_enter(self) -> bool:',
+            '        """Determine if should enter position."""',
+            '        # Check if we have all required indicators',
+            '        required_indicators = [k for k in self.indicators.keys() if k != "current_price"]',
+            '        if not all(self.indicators.get(ind) is not None for ind in required_indicators):',
+            '            return False',
+            '',
+            '        try:',
+            '            # Entry conditions'
+        ]
+
+        # Convert each rule to Python condition
+        for i, rule in enumerate(entry_rules):
+            condition = self._convert_rule_to_python(rule)
+            lines.append(f'            condition_{i+1} = {condition}')
+
+        # Combine all conditions
+        num_conditions = len(entry_rules)
+        conditions_str = ' and '.join(f'condition_{i+1}' for i in range(num_conditions))
+        lines.append(f'            return {conditions_str}')
+        lines.append('')
+        lines.append('        except Exception as e:')
+        lines.append('            # Handle any calculation errors gracefully')
+        lines.append('            return False')
+
+        return '\n'.join(lines)
+
+    def _generate_should_exit(self, exit_rules: List[str]) -> str:
+        """Generate should_exit method.
+
+        Args:
+            exit_rules: List of exit condition strings
+
+        Returns:
+            should_exit method code
+        """
+        lines = [
+            '    def should_exit(self) -> bool:',
+            '        """Determine if should exit position."""',
+            '        # Check if we have all required indicators',
+            '        if not self.indicators:',
+            '            return False',
+            '',
+            '        try:',
+            '            # Exit conditions'
+        ]
+
+        # Convert each rule to Python condition
+        for i, rule in enumerate(exit_rules):
+            condition = self._convert_rule_to_python(rule)
+            lines.append(f'            condition_{i+1} = {condition}')
+
+        # Combine all conditions (usually OR for exits)
+        num_conditions = len(exit_rules)
+        conditions_str = ' or '.join(f'condition_{i+1}' for i in range(num_conditions))
+        lines.append(f'            return {conditions_str}')
+        lines.append('')
+        lines.append('        except Exception as e:')
+        lines.append('            return False')
+
+        return '\n'.join(lines)
+
+    def _convert_rule_to_python(self, rule: str) -> str:
+        """Convert natural language rule to Python condition.
+
+        Args:
+            rule: Natural language condition string
+
+        Returns:
+            Python boolean expression
+        """
+        # Convert indicator references to self.indicators['...']
+        # Handle common patterns like "RSI < 30", "EMA > SMA", "price crosses above EMA"
+
+        rule = rule.strip()
+
+        # Replace indicator names with self.indicators access
+        # Simple pattern matching (can be enhanced)
+        rule = re.sub(r'\b([A-Z][A-Za-z_]*)\b(?!\[)', r"self.indicators.get('\1'.lower())", rule)
+
+        # Convert comparison operators (if needed)
+        rule = rule.replace(' crosses above ', ' > ')
+        rule = rule.replace(' crosses below ', ' < ')
+        rule = rule.replace(' is greater than ', ' > ')
+        rule = rule.replace(' is less than ', ' < ')
+
+        # Handle special keywords
+        rule = rule.replace(' AND ', ' and ')
+        rule = rule.replace(' OR ', ' or ')
+
+        return rule
+
+    def _generate_stop_loss_method(self, stop_loss: Dict[str, Any]) -> str:
+        """Generate stop_loss method.
+
+        Args:
+            stop_loss: Stop loss configuration
+
+        Returns:
+            stop_loss method code
+        """
+        stop_type = stop_loss.get('type', 'none')
+        value = stop_loss.get('value', 0)
+
+        lines = [
+            '    def stop_loss(self, entry_price: float) -> Optional[float]:',
+            '        """Calculate stop loss price."""'
+        ]
+
+        if stop_type == 'fixed_percentage':
+            lines.append(f'        return entry_price * (1 - {value})')
+        elif stop_type == 'atr_based':
+            lines.append('        # ATR-based stop loss')
+            lines.append(f"        atr = self.indicators.get('atr', 0)")
+            lines.append(f'        return entry_price - ({value} * atr)')
+        else:  # none
+            lines.append('        return None')
+
+        return '\n'.join(lines)
+
+    def _generate_take_profit_method(self, take_profit: Dict[str, Any]) -> str:
+        """Generate take_profit method.
+
+        Args:
+            take_profit: Take profit configuration
+
+        Returns:
+            take_profit method code
+        """
+        tp_type = take_profit.get('type', 'none')
+        value = take_profit.get('value', 0)
+
+        lines = [
+            '    def take_profit(self, entry_price: float) -> Optional[float]:',
+            '        """Calculate take profit price."""'
+        ]
+
+        if tp_type == 'fixed_percentage':
+            lines.append(f'        return entry_price * (1 + {value})')
+        elif tp_type == 'trailing':
+            lines.append('        # Trailing take profit (simplified)')
+            lines.append(f'        return entry_price * (1 + {value})')
+        else:  # none
+            lines.append('        return None')
+
+        return '\n'.join(lines)
+
+
+def save_strategy_code(code: str, filepath: str):
+    """Save generated strategy code to file.
+
+    Args:
+        code: Python code string
+        filepath: Output file path
+    """
+    with open(filepath, 'w') as f:
+        f.write(code)
+
+    logger.info(f"Saved strategy code to: {filepath}")

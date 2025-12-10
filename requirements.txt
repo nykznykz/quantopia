@@ -1,0 +1,43 @@
+# Core dependencies (from simulated_exchange)
+pandas>=2.0.0
+numpy>=1.24.0
+python-dateutil>=2.8.0
+
+# WebSocket and HTTP for live feeds
+websocket-client>=1.6.0
+requests>=2.31.0
+
+# Configuration
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Exchange APIs
+ccxt>=4.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Optional visualization
+matplotlib>=3.7.0
+
+# Optional Parquet support
+pyarrow>=12.0.0
+
+# LLM dependencies for OmniAlpha
+openai>=1.0.0  # OpenAI GPT-4 API
+anthropic>=0.21.0  # Claude API (optional, for code generation)
+
+# Data science and indicators
+ta-lib>=0.4.28  # Technical analysis library (optional, may need manual install)
+scipy>=1.11.0   # Scientific computing
+
+# Database
+sqlalchemy>=2.0.0  # For strategy database
+
+# Logging
+structlog>=23.0.0  # Structured logging
+
+# Code generation and validation
+black>=23.0.0  # Code formatter for generated strategies
+pylint>=3.0.0  # Linter for validation

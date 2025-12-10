@@ -1,0 +1,186 @@
+# Research Orchestrator Configuration
+# Configuration for the autonomous strategy research flywheel
+
+# === RESEARCH ITERATION SETTINGS ===
+research_iteration:
+  # Number of strategies to generate per batch
+  num_strategies_per_batch: 10
+
+  # Maximum refinement attempts for failed strategies
+  max_refinement_attempts: 2
+
+  # Number of variants to generate for each successful strategy family
+  strategy_family_size: 3
+
+  # Enable/disable refinement of failed strategies
+  enable_refinement: true
+
+  # Enable/disable family generation from successful strategies
+  enable_family_generation: true
+
+  # Enable/disable database storage
+  enable_database_storage: true
+
+
+# === STRATEGY GENERATION SETTINGS ===
+strategy_generation:
+  # LLM provider: openai, anthropic, deepseek
+  llm_provider: "openai"
+
+  # Model name (e.g., "gpt-4", "claude-sonnet-4.5", "deepseek-chat")
+  llm_model: "gpt-4"
+
+  # Temperature for strategy generation (0.0-1.0, higher = more creative)
+  generation_temperature: 0.8
+
+  # Temperature for code generation (lower = more deterministic)
+  code_generation_temperature: 0.2
+
+  # Max retries for failed generations
+  max_generation_retries: 3
+
+
+# === BACKTESTING SETTINGS ===
+backtesting:
+  # Initial capital for backtests
+  initial_capital: 10000.0
+
+  # Slippage in basis points (5.0 = 0.05%)
+  slippage_bps: 5.0
+
+  # Maker fee (0.0 = 0%)
+  maker_fee: 0.0
+
+  # Taker fee (0.00025 = 0.025%)
+  taker_fee: 0.00025
+
+  # Run backtests in parallel (experimental, can be unstable)
+  parallel_backtesting: false
+
+
+# === STRATEGY FILTERING CRITERIA ===
+filtering:
+  # Minimum total return (0.05 = 5%)
+  min_total_return: 0.05
+
+  # Minimum Sharpe ratio
+  min_sharpe_ratio: 0.5
+
+  # Maximum drawdown (0.30 = 30%)
+  max_drawdown: 0.30
+
+  # Maximum consecutive losses
+  max_consecutive_losses: 10
+
+  # Minimum number of trades
+  min_num_trades: 10
+
+  # Maximum number of trades (null = no limit)
+  max_num_trades: null
+
+  # Minimum win rate (0.30 = 30%)
+  min_win_rate: 0.30
+
+  # Minimum profit factor
+  min_profit_factor: 1.0
+
+  # Minimum sample size for statistical significance
+  min_sample_size: 20
+
+
+# === PORTFOLIO EVALUATION SETTINGS ===
+portfolio:
+  # Allocation method: "equal_weight", "max_sharpe", "risk_parity"
+  allocation_method: "max_sharpe"
+
+  # Maximum correlation threshold (strategies above this are considered redundant)
+  max_correlation: 0.7
+
+  # Minimum diversification ratio for portfolio
+  min_diversification: 0.7
+
+  # Maximum portfolio drawdown threshold
+  max_portfolio_drawdown: 0.25
+
+  # Minimum portfolio Sharpe ratio
+  min_portfolio_sharpe: 1.0
+
+
+# === DATABASE SETTINGS ===
+database:
+  # Path to SQLite database
+  path: "data/strategies.db"
+
+  # Enable database storage
+  enable_storage: true
+
+  # Enable SQL logging (useful for debugging)
+  echo_sql: false
+
+
+# === LOGGING SETTINGS ===
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+
+  # Log format
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # Log to file
+  log_to_file: true
+
+  # Log file path
+  log_file_path: "logs/orchestrator.log"
+
+
+# === INDICATOR SETTINGS ===
+indicators:
+  # Available indicators for strategy generation
+  available_indicators:
+    # Trend indicators
+    - sma
+    - ema
+    - wma
+    - tema
+    - dema
+    - kama
+    - vwap
+
+    # Momentum indicators
+    - rsi
+    - stoch
+    - stoch_rsi
+    - cci
+    - williams_r
+    - roc
+    - macd
+
+    # Volatility indicators
+    - atr
+    - bb_upper
+    - bb_lower
+    - bb_width
+    - kc_upper
+    - kc_lower
+
+    # Volume indicators
+    - obv
+    - mfi
+    - cmf
+
+    # Regime/Market structure
+    - adx
+    - aroon_up
+    - aroon_down
+
+
+# === PERFORMANCE TRACKING ===
+performance_tracking:
+  # Track iteration performance over time
+  enable_tracking: true
+
+  # Save iteration reports to disk
+  save_reports: true
+
+  # Reports directory
+  reports_dir: "reports/iterations"

@@ -1,0 +1,30 @@
+# Default configuration for SimulatedExchange
+
+exchange:
+  initial_capital: 10000.0
+  mode: backtest  # 'backtest' or 'live'
+
+slippage:
+  model: fixed  # 'fixed', 'volume_based', 'hybrid', 'none'
+  fixed_bps: 5  # For fixed model
+
+fees:
+  model: tiered  # 'flat', 'tiered', 'none'
+  maker_fee: 0.0000  # Hyperliquid: 0%
+  taker_fee: 0.00025  # Hyperliquid: 0.025%
+
+backtest:
+  data_source: data/crypto_data.csv
+  symbols:
+    - BTC-USD
+    - ETH-USD
+  start_date: 2024-01-01
+  end_date: 2024-12-31
+  timeframe: 1h
+
+live:
+  exchange: binance  # 'binance' or 'hyperliquid'
+  testnet: true
+  symbols:
+    - BTC-USD
+  ws_url: null  # Optional custom WebSocket URL

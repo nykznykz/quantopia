@@ -1,0 +1,26 @@
+# Hyperliquid-specific configuration
+
+exchange:
+  initial_capital: 10000.0
+  mode: backtest
+
+slippage:
+  model: fixed
+  fixed_bps: 3  # Lower slippage for Hyperliquid
+
+fees:
+  model: tiered
+  maker_fee: 0.0000  # 0% maker fee
+  taker_fee: 0.00025  # 0.025% taker fee
+
+backtest:
+  symbols:
+    - BTC-USD
+    - ETH-USD
+  timeframe: 1h
+
+live:
+  exchange: hyperliquid
+  testnet: true
+  symbols:
+    - BTC-USD

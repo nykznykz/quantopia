@@ -1,0 +1,136 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# API keys and secrets
+*.key
+*.pem
+credentials.json
+secrets.json
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Logs
+logs/
+*.log
+log/
+
+# Cache
+.cache/
+*.pyc
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Results and exports
+results/
+exports/
+output/
+backtest_results/
+
+# Data files (large CSV/Parquet files)
+data/*.csv
+data/*.parquet
+data/*.h5
+data/*.hdf5
+!data/.gitkeep
+
+# Scratchpad (temporary files and notes)
+scratchpad/
+
+# Documentation builds
+docs/_build/
+docs/_static/
+docs/_templates/
+site/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# profiling data
+*.prof
+
+# OS-specific
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# Claude Code plans (optional - uncomment if you don't want to track them)
+# .claude/plans/
