@@ -45,9 +45,64 @@ class BaseStrategy(ABC):
         self.description = ""
         self.indicators = {}
 
+        # ML model support (optional)
+        self.ml_predictor = None
+        self.ml_predictions = {}
+
         # Internal state
         self._current_bar_data = None
         self._position = None
+
+    def load_ml_model(self, model_path: str, pipeline_path: Optional[str] = None) -> None:
+        """Load ML model for predictions.
+
+        Args:
+            model_path: Path to saved ML model
+            pipeline_path: Path to feature pipeline (optional)
+        """
+        from src.ml.prediction import ModelPredictor
+
+        try:
+            self.ml_predictor = ModelPredictor.from_files(
+                model_path=model_path,
+                pipeline_path=pipeline_path
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to load ML model: {e}")
+
+    def get_ml_prediction(self, data: pd.DataFrame) -> float:
+        """Get ML model prediction for current data.
+
+        Args:
+            data: Historical OHLCV DataFrame
+
+        Returns:
+            Model prediction (interpretation depends on model type)
+        """
+        if self.ml_predictor is None:
+            raise RuntimeError("ML model not loaded. Call load_ml_model() first.")
+
+        # Get prediction for latest data point
+        prediction = self.ml_predictor.predict(data)
+
+        # Return last prediction
+        return float(prediction[-1]) if len(prediction) > 0 else 0.0
+
+    def get_ml_signal(self, data: pd.DataFrame, threshold: float = 0.5) -> int:
+        """Get trading signal from ML model.
+
+        Args:
+            data: Historical OHLCV DataFrame
+            threshold: Confidence threshold
+
+        Returns:
+            Signal: 1 (buy), -1 (sell), 0 (hold)
+        """
+        if self.ml_predictor is None:
+            return 0
+
+        signals = self.ml_predictor.get_signals(data, threshold=threshold)
+        return int(signals.iloc[-1]) if len(signals) > 0 else 0
 
     @abstractmethod
     def calculate_indicators(self, data: pd.DataFrame) -> Dict[str, Any]:
