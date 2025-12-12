@@ -81,6 +81,11 @@ class BatchTester:
 
         logger.info(f"Running batch backtest for {len(strategy_codes)} strategies")
 
+        # Create scratchpad directory for debugging
+        scratchpad_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../scratchpad/strategies'))
+        os.makedirs(scratchpad_dir, exist_ok=True)
+        logger.info(f"Saving strategy codes to: {scratchpad_dir}")
+
         results = []
 
         if parallel:
@@ -120,6 +125,24 @@ class BatchTester:
             # Sequential execution (recommended)
             for idx, (code, name) in enumerate(zip(strategy_codes, strategy_names)):
                 try:
+                    logger.info(f"Starting backtest {idx+1}/{len(strategy_codes)}: {name}")
+
+                    # Save strategy code to scratchpad for debugging
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    safe_name = name.replace(' ', '_').replace('/', '_').replace('\\', '_')
+                    code_filename = f"{timestamp}_{idx+1}_{safe_name}.py"
+                    code_filepath = os.path.join(scratchpad_dir, code_filename)
+
+                    with open(code_filepath, 'w') as f:
+                        f.write(f"# Strategy: {name}\n")
+                        f.write(f"# Timestamp: {timestamp}\n")
+                        f.write(f"# Index: {idx+1}/{len(strategy_codes)}\n")
+                        f.write(f"# Symbol: {symbol}\n")
+                        f.write("#" + "="*70 + "\n\n")
+                        f.write(code)
+
+                    logger.info(f"  Saved strategy code to: {code_filepath}")
+
                     result = self.runner.run_from_code(
                         strategy_code=code,
                         data=data,
@@ -127,18 +150,38 @@ class BatchTester:
                         strategy_name=name
                     )
 
+                    # Save result status to the code file as a comment
+                    with open(code_filepath, 'a') as f:
+                        f.write(f"\n\n# {'='*70}\n")
+                        f.write(f"# BACKTEST RESULT: {result.get('status', 'unknown')}\n")
+                        if result.get('status') == 'failed':
+                            f.write(f"# ERROR: {result.get('error', 'Unknown error')}\n")
+                        elif result.get('status') == 'success':
+                            metrics = result.get('metrics', {})
+                            f.write(f"# Sharpe: {metrics.get('sharpe_ratio', 0):.2f}\n")
+                            f.write(f"# Return: {metrics.get('total_return', 0):.2f}%\n")
+                            f.write(f"# Max DD: {metrics.get('max_drawdown', 0):.2f}%\n")
+                            f.write(f"# Trades: {metrics.get('total_trades', 0)}\n")
+
                     # Add strategy ID if available
                     if strategy_ids and idx < len(strategy_ids):
                         result['strategy_id'] = strategy_ids[idx]
 
                     results.append(result)
+                    logger.info(f"✓ Completed: {name}")
                 except Exception as e:
                     logger.error(f"✗ Failed: {name} - {e}")
+                    # Log full error details for debugging
+                    import traceback
+                    logger.debug(f"Full traceback:\n{traceback.format_exc()}")
+
                     results.append({
                         'strategy_name': name,
                         'status': 'failed',
-                        'error': str(e)
+                        'error': str(e),
+                        'metrics': {}
                     })
+                    # Continue with next strategy instead of stopping
 
         # Store results in database if enabled
         if self.db and store_in_db:

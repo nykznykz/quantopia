@@ -203,15 +203,58 @@ class BaseStrategy(ABC):
 
         bar_count = 0
         trades_executed = 0
+        max_bars = len(data)  # Maximum bars to prevent infinite loops
 
-        # Main backtest loop
+        # PRE-CALCULATE ALL INDICATORS ON FULL DATASET (Performance optimization)
+        # This prevents O(n²) recalculation on every bar
+        import time
+        import logging
+        logger = logging.getLogger(__name__)
+
+        start = time.time()
+        logger.info(f"[BACKTEST] Starting indicator pre-calculation for {len(data)} bars")
+        full_indicators = self.calculate_indicators(data)
+        calc_time = time.time() - start
+        logger.info(f"[BACKTEST] Indicator calculation took {calc_time:.2f}s")
+
+        # Convert single values to series if needed for indexing
+        indicator_series = {}
+        for key, value in full_indicators.items():
+            if isinstance(value, (pd.Series, pd.DataFrame)):
+                indicator_series[key] = value
+            else:
+                # Single value - create series filled with that value
+                indicator_series[key] = pd.Series([value] * len(data), index=data.index)
+
+        logger.info(f"[BACKTEST] Converted indicators to series, starting main loop")
+
+        # Main backtest loop with safety check
+        loop_start = time.time()
         while self.price_feed.has_next():
-            # Get current market data up to this point
-            current_idx = self.price_feed._current_index
-            data_up_to_now = data.iloc[:current_idx + 1]
+            # Safety check to prevent infinite loops
+            if bar_count >= max_bars:
+                raise RuntimeError(
+                    f"Backtest exceeded maximum bars ({max_bars}). "
+                    f"Possible infinite loop in price feed or strategy logic."
+                )
 
-            # Calculate indicators
-            self.indicators = self.calculate_indicators(data_up_to_now)
+            # Progress logging every 1000 bars
+            if bar_count % 1000 == 0 and bar_count > 0:
+                elapsed = time.time() - loop_start
+                logger.info(f"[BACKTEST] Processed {bar_count}/{max_bars} bars in {elapsed:.2f}s")
+
+            # Get current index
+            current_idx = self.price_feed._current_index
+
+            # Extract indicator values for current bar from pre-calculated series
+            self.indicators = {}
+            for key, series in indicator_series.items():
+                if isinstance(series, pd.DataFrame):
+                    # For multi-column indicators (e.g., ADX returns DataFrame)
+                    self.indicators[key] = series.iloc[current_idx] if current_idx < len(series) else None
+                else:
+                    # For single-column indicators
+                    self.indicators[key] = series.iloc[current_idx] if current_idx < len(series) else None
 
             # Get current position
             self._position = self.exchange.get_position(self.symbol)
