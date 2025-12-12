@@ -34,10 +34,16 @@ class Strategy(Base):
     indicators = Column(JSON, nullable=False)  # List of indicator names
     parameters = Column(JSON, nullable=True)   # Strategy-specific parameters
 
-    # Genealogy tracking
+    # ML Strategy Support (Phase 1a)
+    ml_strategy_type = Column(String(50), default='pure_technical')  # pure_technical | hybrid_ml | pure_ml
+    ml_models_used = Column(JSON, nullable=True)  # List of model IDs (e.g., ['XGBoost_direction_v3'])
+
+    # Genealogy tracking (enhanced for Phase 1a)
     parent_id = Column(Integer, ForeignKey('strategies.id'), nullable=True, index=True)
+    grandparent_id = Column(Integer, nullable=True)  # Two-hop genealogy
     generation = Column(Integer, default=0)  # 0 for original, increments with each refinement
     refinement_type = Column(String(50), nullable=True)  # refinement, family_member, variation
+    exploration_vector = Column(JSON, nullable=True)  # What changed from parent (e.g., {'modification': 'upgraded_model', 'details': '...'})
 
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
@@ -55,7 +61,8 @@ class Strategy(Base):
     forward_tests = relationship('ForwardTestQueue', back_populates='strategy', cascade='all, delete-orphan')
 
     def __repr__(self):
-        return f"<Strategy(id={self.id}, name='{self.name}', type='{self.strategy_type}', status='{self.status}')>"
+        ml_type = f", ml_type='{self.ml_strategy_type}'" if self.ml_strategy_type != 'pure_technical' else ""
+        return f"<Strategy(id={self.id}, name='{self.name}', type='{self.strategy_type}'{ml_type}, status='{self.status}')>"
 
 
 class BacktestResult(Base):

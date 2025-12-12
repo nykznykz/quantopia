@@ -66,8 +66,12 @@ class StrategyDatabase:
         description: Optional[str] = None,
         parameters: Optional[Dict[str, Any]] = None,
         parent_id: Optional[int] = None,
+        grandparent_id: Optional[int] = None,
         generation: int = 0,
         refinement_type: Optional[str] = None,
+        exploration_vector: Optional[Dict[str, Any]] = None,
+        ml_strategy_type: str = 'pure_technical',
+        ml_models_used: Optional[List[str]] = None,
         llm_model: Optional[str] = None,
         prompt_version: Optional[str] = None,
         status: str = 'generated'
@@ -108,8 +112,12 @@ class StrategyDatabase:
                 indicators=indicators,
                 parameters=parameters or {},
                 parent_id=parent_id,
+                grandparent_id=grandparent_id,
                 generation=generation,
                 refinement_type=refinement_type,
+                exploration_vector=exploration_vector or {},
+                ml_strategy_type=ml_strategy_type,
+                ml_models_used=ml_models_used or [],
                 llm_model=llm_model,
                 prompt_version=prompt_version,
                 status=status,
@@ -809,5 +817,223 @@ class StrategyDatabase:
                 'portfolio_evaluations': session.query(PortfolioEvaluation).count(),
                 'forward_test_queue_size': session.query(ForwardTestQueue).filter_by(status='queued').count()
             }
+        finally:
+            session.close()
+
+    # ============================================================================
+    # Agent-Specific Query Methods (Phase 1a)
+    # ============================================================================
+
+    def get_top_strategies(
+        self,
+        metric: str = 'sharpe_ratio',
+        limit: int = 10,
+        ml_strategy_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get top performing strategies by metric.
+
+        Args:
+            metric: Metric to sort by ('sharpe_ratio', 'total_return_pct', etc.)
+            limit: Number of results
+            ml_strategy_type: Filter by ML type (pure_technical, hybrid_ml, pure_ml)
+
+        Returns:
+            List of strategy dicts with backtest results
+        """
+        session = self.get_session()
+        try:
+            query = session.query(Strategy, BacktestResult).join(
+                BacktestResult, Strategy.id == BacktestResult.strategy_id
+            ).filter(BacktestResult.passed_filters == True)
+
+            if ml_strategy_type:
+                query = query.filter(Strategy.ml_strategy_type == ml_strategy_type)
+
+            # Sort by metric
+            if metric == 'sharpe_ratio':
+                query = query.order_by(desc(BacktestResult.sharpe_ratio))
+            elif metric == 'total_return_pct':
+                query = query.order_by(desc(BacktestResult.total_return_pct))
+            elif metric == 'win_rate':
+                query = query.order_by(desc(BacktestResult.win_rate))
+
+            query = query.limit(limit)
+
+            results = []
+            for strategy, backtest in query.all():
+                results.append({
+                    'id': strategy.id,
+                    'name': strategy.name,
+                    'strategy_type': strategy.strategy_type,
+                    'ml_strategy_type': strategy.ml_strategy_type,
+                    'ml_models_used': strategy.ml_models_used,
+                    'indicators': strategy.indicators,
+                    'created_at': strategy.created_at,
+                    'metrics': {
+                        'sharpe_ratio': backtest.sharpe_ratio,
+                        'total_return_pct': backtest.total_return_pct,
+                        'max_drawdown_pct': backtest.max_drawdown_pct,
+                        'win_rate': backtest.win_rate,
+                        'num_trades': backtest.num_trades
+                    }
+                })
+
+            return results
+        finally:
+            session.close()
+
+    def search_by_model(self, model_id: str) -> List[Dict[str, Any]]:
+        """
+        Search for strategies using a specific ML model.
+
+        Args:
+            model_id: Model ID (e.g., 'XGBoost_direction_v3')
+
+        Returns:
+            List of strategy dicts with performance metrics
+        """
+        session = self.get_session()
+        try:
+            # Find strategies where ml_models_used contains the model_id
+            strategies = session.query(Strategy).filter(
+                Strategy.ml_models_used.contains([model_id])
+            ).all()
+
+            results = []
+            for strategy in strategies:
+                # Get latest backtest
+                backtest = session.query(BacktestResult).filter_by(
+                    strategy_id=strategy.id
+                ).order_by(desc(BacktestResult.tested_at)).first()
+
+                result = {
+                    'id': strategy.id,
+                    'name': strategy.name,
+                    'strategy_type': strategy.strategy_type,
+                    'ml_strategy_type': strategy.ml_strategy_type,
+                    'ml_models_used': strategy.ml_models_used,
+                    'status': strategy.status,
+                    'created_at': strategy.created_at
+                }
+
+                if backtest:
+                    result['metrics'] = {
+                        'sharpe_ratio': backtest.sharpe_ratio,
+                        'total_return_pct': backtest.total_return_pct,
+                        'passed_filters': backtest.passed_filters
+                    }
+
+                results.append(result)
+
+            return results
+        finally:
+            session.close()
+
+    def get_underexplored_areas(self) -> Dict[str, Any]:
+        """
+        Identify underexplored areas in the strategy space.
+
+        Returns:
+            Dict with counts by strategy type, ML type, indicators, etc.
+        """
+        session = self.get_session()
+        try:
+            # Count by strategy logic type
+            by_logic_type = dict(
+                session.query(Strategy.strategy_type, func.count(Strategy.id))
+                .group_by(Strategy.strategy_type).all()
+            )
+
+            # Count by ML type
+            by_ml_type = dict(
+                session.query(Strategy.ml_strategy_type, func.count(Strategy.id))
+                .group_by(Strategy.ml_strategy_type).all()
+            )
+
+            # Get average metrics by ML type
+            ml_performance = {}
+            for ml_type in ['pure_technical', 'hybrid_ml', 'pure_ml']:
+                avg_sharpe = session.query(func.avg(BacktestResult.sharpe_ratio)).join(
+                    Strategy
+                ).filter(Strategy.ml_strategy_type == ml_type).scalar()
+
+                ml_performance[ml_type] = {
+                    'count': by_ml_type.get(ml_type, 0),
+                    'avg_sharpe': avg_sharpe or 0.0
+                }
+
+            # Count indicator usage
+            indicator_counts = {}
+            strategies = session.query(Strategy).all()
+            for strategy in strategies:
+                for indicator in strategy.indicators:
+                    indicator_counts[indicator] = indicator_counts.get(indicator, 0) + 1
+
+            # Sort indicators by usage (ascending) to find underused ones
+            sorted_indicators = sorted(indicator_counts.items(), key=lambda x: x[1])
+
+            return {
+                'by_logic_type': by_logic_type,
+                'by_ml_type': by_ml_type,
+                'ml_performance': ml_performance,
+                'total_strategies': len(strategies),
+                'underused_indicators': sorted_indicators[:5],  # Bottom 5
+                'popular_indicators': sorted(indicator_counts.items(), key=lambda x: x[1], reverse=True)[:5]  # Top 5
+            }
+        finally:
+            session.close()
+
+    def get_genealogy(self, strategy_id: int, depth: int = 2) -> Dict[str, Any]:
+        """
+        Get genealogy of a strategy (up to specified depth).
+
+        Args:
+            strategy_id: Strategy ID
+            depth: How many generations to trace back (1 or 2)
+
+        Returns:
+            Dict with parent and grandparent info
+        """
+        session = self.get_session()
+        try:
+            strategy = session.query(Strategy).get(strategy_id)
+            if not strategy:
+                return {}
+
+            genealogy = {
+                'current': {
+                    'id': strategy.id,
+                    'name': strategy.name,
+                    'strategy_type': strategy.strategy_type,
+                    'ml_strategy_type': strategy.ml_strategy_type,
+                    'generation': strategy.generation
+                }
+            }
+
+            # Get parent
+            if strategy.parent_id and depth >= 1:
+                parent = session.query(Strategy).get(strategy.parent_id)
+                if parent:
+                    genealogy['parent'] = {
+                        'id': parent.id,
+                        'name': parent.name,
+                        'strategy_type': parent.strategy_type,
+                        'ml_strategy_type': parent.ml_strategy_type,
+                        'exploration_vector': strategy.exploration_vector
+                    }
+
+                    # Get grandparent
+                    if parent.parent_id and depth >= 2:
+                        grandparent = session.query(Strategy).get(parent.parent_id)
+                        if grandparent:
+                            genealogy['grandparent'] = {
+                                'id': grandparent.id,
+                                'name': grandparent.name,
+                                'strategy_type': grandparent.strategy_type,
+                                'ml_strategy_type': grandparent.ml_strategy_type
+                            }
+
+            return genealogy
         finally:
             session.close()
