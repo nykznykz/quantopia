@@ -89,10 +89,10 @@ output/
 backtest_results/
 
 # Data files (large CSV/Parquet files)
-data/*.csv
-data/*.parquet
-data/*.h5
-data/*.hdf5
+data/**/*.csv
+data/**/*.parquet
+data/**/*.h5
+data/**/*.hdf5
 !data/.gitkeep
 
 # Scratchpad (temporary files and notes)

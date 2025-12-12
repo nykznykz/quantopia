@@ -1,0 +1,23 @@
+# Quantopia Systemd Service
+# Copy to /etc/systemd/system/quantopia.service
+# Enable with: sudo systemctl enable quantopia
+# Start with: sudo systemctl start quantopia
+
+[Unit]
+Description=Quantopia Autonomous Quant Research Platform
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/quantopia
+Environment="OPENAI_API_KEY=your-api-key"
+Environment="PATH=/path/to/quantopia/venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/path/to/quantopia/venv/bin/python /path/to/quantopia/quantopia.py start --continuous --interval 3600
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/path/to/quantopia/logs/quantopia.log
+StandardError=append:/path/to/quantopia/logs/quantopia-error.log
+
+[Install]
+WantedBy=multi-user.target
