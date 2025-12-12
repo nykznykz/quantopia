@@ -126,6 +126,12 @@ Requirements:
 9. Use self.indicators dict to store calculated indicator values
 10. Implement all required methods: __init__, calculate_indicators, should_enter, should_exit
 
+CRITICAL PERFORMANCE REQUIREMENT:
+- calculate_indicators() must return FULL SERIES (pd.Series/pd.DataFrame), NOT single values
+- Do NOT use .iloc[-1] to extract last values in calculate_indicators()
+- The backtest engine pre-calculates indicators once and indexes into them
+- In should_enter()/should_exit(), self.indicators will contain scalar values (already extracted)
+
 Generate clean, production-ready code that can be executed immediately."""
 
     def _create_code_generation_prompt(self, strategy_metadata: Dict[str, Any]) -> str:
@@ -143,11 +149,63 @@ Generate clean, production-ready code that can be executed immediately."""
         # Format strategy metadata as JSON
         strategy_json = json.dumps(strategy_metadata, indent=2)
 
+        # Check if ML model is involved
+        has_ml = strategy_metadata.get('ml_strategy_type') != 'pure_technical'
+        ml_model_id = strategy_metadata.get('ml_model_id')
+
         prompt = f"""Generate a complete Python trading strategy class based on this specification:
 
 {strategy_json}
 
-{INDICATOR_SPECS_STRING}
+{INDICATOR_SPECS_STRING}"""
+
+        # Add ML-specific instructions if needed
+        if has_ml and ml_model_id:
+            prompt += f"""
+
+ML MODEL INTEGRATION:
+This strategy uses ML model: {ml_model_id}
+
+The strategy class must include ML model loading and prediction:
+1. Load the model in __init__() using self.load_ml_model()
+2. Get ML predictions in calculate_indicators() using self.get_ml_signal()
+3. Use ML predictions as signals in should_enter() and should_exit()
+
+Example ML integration:
+```python
+def __init__(self, exchange, price_feed, symbol, initial_capital=10000.0):
+    super().__init__(exchange, price_feed, symbol, initial_capital)
+
+    # Load ML model
+    self.load_ml_model(
+        model_path="models/{ml_model_id}.joblib",
+        pipeline_path="models/{ml_model_id}_pipeline.joblib"
+    )
+
+    # Initialize regular indicators...
+
+def calculate_indicators(self, data: pd.DataFrame) -> Dict[str, Any]:
+    indicators = {{}}
+
+    # Calculate regular indicators first...
+
+    # Get ML prediction
+    ml_signal = self.get_ml_signal(data, threshold=0.6)
+    indicators['ml_signal'] = ml_signal  # 1 (bullish), -1 (bearish), 0 (neutral)
+
+    return indicators
+
+def should_enter(self) -> bool:
+    # Combine ML signal with technical indicators
+    ml_bullish = self.indicators.get('ml_signal', 0) == 1
+    rsi_condition = self.indicators.get('rsi', 50) < 40
+
+    return ml_bullish and rsi_condition  # Both conditions
+```
+
+IMPORTANT: The ML signal should be treated as one component of the entry/exit decision, not the only factor."""
+
+        prompt += """
 
 The class must follow this structure:
 
@@ -186,21 +244,31 @@ class YourStrategyName(BaseStrategy):
     def calculate_indicators(self, data: pd.DataFrame) -> Dict[str, Any]:
         \"\"\"Calculate all strategy indicators.
 
+        IMPORTANT: This method should return FULL SERIES for all indicators, not just the last value.
+        The backtest engine will index into these series for each bar.
+
         Args:
             data: Historical OHLCV DataFrame
 
         Returns:
-            Dict with indicator values
+            Dict with indicator values as pd.Series or pd.DataFrame
         \"\"\"
         indicators = {{}}
 
-        # Calculate each indicator
-        # Handle both single-value indicators (RSI, EMA) and multi-value indicators (MACD, Bollinger Bands)
-        # For multi-value indicators (like MACD), extract individual components
+        # Calculate each indicator and return the FULL SERIES
+        # Example:
+        #   rsi_series = self.rsi.calculate(data)  # Returns full series
+        #   indicators['rsi'] = rsi_series  # Store the full series, NOT rsi_series.iloc[-1]
+        #
+        # For multi-value indicators (MACD, Bollinger Bands, ADX), extract columns but keep as series:
+        #   macd_df = self.macd.calculate(data)  # Returns DataFrame
+        #   indicators['macd'] = macd_df['macd']  # Store series, NOT .iloc[-1]
+        #   indicators['signal'] = macd_df['signal']
+        #   indicators['histogram'] = macd_df['histogram']
 
-        # Store current price
+        # Store current price series
         if 'close' in data.columns and len(data) > 0:
-            indicators['current_price'] = data['close'].iloc[-1]
+            indicators['current_price'] = data['close']  # Full series, NOT .iloc[-1]
 
         return indicators
 
@@ -269,10 +337,50 @@ Important notes:
 - For indicators with parameters, pass them during initialization using the EXACT parameter names from specs
 - Multi-output indicators (MACD, BollingerBands, Stochastic, ADX, etc.) return DataFrames - extract specific columns
 - Single-output indicators (RSI, EMA, SMA, ATR, etc.) return Series - use iloc[-1] to get latest value
-- Entry rules should be combined with AND logic
-- Exit rules should be combined with OR logic
 - Include proper error handling in all methods
-- Convert natural language rules (e.g., "RSI < 30") to Python comparisons
+
+**CRITICAL IMPLEMENTATION INSTRUCTIONS - YOUR ONLY JOB IS TRANSLATION, NOT STRATEGY DESIGN:**
+
+1. **Faithfully implement the EXACT logic provided in entry_conditions.logic and exit_conditions.logic**:
+   - The strategy specification contains complete boolean expressions (e.g., "(RSI(14) < 44 OR price < BB_lower) AND volume > avg_volume")
+   - Translate these EXACTLY to Python - do NOT modify thresholds, do NOT add conditions, do NOT change AND/OR logic
+   - Use the EXACT numeric thresholds specified (e.g., if logic says "< 44", use < 44, not < 30 or < 40)
+
+2. **Do NOT make strategic decisions**:
+   - Do NOT decide how to combine conditions (the logic string specifies AND/OR explicitly)
+   - Do NOT modify or "improve" thresholds (they are calibrated to market statistics)
+   - Do NOT add additional conditions beyond what the logic string specifies
+   - Do NOT interpret vague terms - the logic is specific and complete
+
+3. **Translation approach**:
+   - Parse the logic string to identify all conditions
+   - Map indicator names to self.indicators dict keys (lowercase, no periods)
+   - Implement the boolean expression with proper Python syntax
+   - Handle None/NaN values gracefully (return False if key indicators are None)
+
+4. **Example translation**:
+   ```python
+   # Logic string: "(RSI(14) < 44 OR RSI(5) < 35) AND TrendStrength < 0.5"
+
+   def should_enter(self) -> bool:
+       rsi_14 = self.indicators.get('rsi_14')
+       rsi_5 = self.indicators.get('rsi_5')
+       trend_strength = self.indicators.get('trendstrength')
+
+       # Check for None values
+       if None in [rsi_14, rsi_5, trend_strength]:
+           return False
+
+       # Direct translation of logic string
+       oversold = (rsi_14 < 44) or (rsi_5 < 35)
+       ranging = trend_strength < 0.5
+
+       return oversold and ranging
+   ```
+
+5. **For risk management**:
+   - Implement stop_loss and take_profit based on risk_management specifications
+   - Use exact values/formulas specified (e.g., "2.0 * ATR(14)" means multiply ATR by 2.0)
 
 Example of CORRECT indicator initialization:
 ```python
