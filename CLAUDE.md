@@ -15,6 +15,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - **Code Generator** (`src/code_generation/code_generator.py`): Synthesizes executable Python classes from strategy metadata
    - **Research Orchestrator** (`src/orchestrator/research_engine.py`): Coordinates full research iterations
 
+   **CRITICAL SEPARATION OF CONCERNS**:
+   - Strategy Agent outputs COMPLETE specifications with exact boolean logic (e.g., `"(RSI(14) < 44 OR RSI(5) < 35) AND TrendStrength < 0.5"`)
+   - Agent Router passes through specifications WITHOUT modification (no hardcoded rule generation)
+   - Code Generator faithfully translates logic WITHOUT interpretation (no deciding thresholds or AND/OR combinations)
+   - This separation prevents the "0-trade problem" where strategies were too restrictive due to Code Generator adding extra conditions
+
 2. **Database-Driven Learning**: All strategies, results, and ML models are stored in SQLite (`data/strategies.db`) to enable agents to learn from past explorations and avoid redundant work.
 
 3. **Backtesting Engine**: Uses the `simulated_exchange` framework (separate package in `simulated_exchange/`) for realistic trade execution simulation.
@@ -43,9 +49,17 @@ When encountering missing packages:
 
 2. Set required API keys in `.env`:
    - `OPENAI_API_KEY` (required for default LLM operations)
-   - Optional: `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `AZURE_OPENAI_KEY`
+   - Optional: `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`
+   - For Azure OpenAI: `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_MODEL`
 
 3. LLM provider can be overridden via `LLM_PROVIDER` env var or config
+
+### Market Statistics Calibration
+The Strategy Agent uses market statistics to generate realistic thresholds:
+- Market stats file: `scratchpad/market_statistics.json` (auto-generated from historical data)
+- Example: RSI < 44 (30th percentile, 30% frequency) vs traditional RSI < 30 (4.6% frequency)
+- Generate market stats: `python scratchpad/analyze_market_statistics.py`
+- This prevents overly restrictive conditions that result in 0 trades
 
 ## Common Commands
 
@@ -96,6 +110,26 @@ pytest tests/test_full_flywheel.py
 pytest -v -s tests/
 ```
 
+### Diagnostic Tools (in scratchpad/)
+```bash
+# Analyze strategies with 0 trades and classify root causes
+python scratchpad/diagnose_zero_trades.py
+
+# Generate market statistics from historical data
+python scratchpad/analyze_market_statistics.py
+
+# Create human-readable diagnostic report
+python scratchpad/generate_diagnostic_report.py
+
+# Test code generation with mock strategy
+python scratchpad/test_code_generation_fix.py
+```
+
+These tools help identify:
+- Implementation bugs (missing prev_indicators, string matching on numeric fields)
+- Generation issues (overly restrictive conditions, unrealistic thresholds)
+- Threshold calibration needs (using market-calibrated vs traditional thresholds)
+
 ## Architecture Deep Dive
 
 ### Strategy Generation Flow
@@ -120,7 +154,29 @@ pytest -v -s tests/
 
 - **Strategy Metadata**: Dict with `strategy_name`, `strategy_type`, `indicators`, `entry_rules`, `exit_rules`, `ml_strategy_type`, etc.
 - **Backtest Results**: Dict with `metrics` (Sharpe, return, drawdown, win_rate, etc.), `equity_curve`, `trade_history`
-- **Agent Decisions**: JSON with `strategy_type`, `rationale`, `logic_type`, `indicators`, `exploration_mode`
+- **Agent Decisions** (NEW FORMAT after architectural fix):
+  ```json
+  {
+    "strategy_type": "pure_technical",
+    "rationale": "Strategy rationale...",
+    "entry_conditions": {
+      "description": "Human-readable summary",
+      "logic": "(RSI(14) < 44 OR RSI(5) < 35) AND TrendStrength < 0.5",
+      "components": [
+        {
+          "indicator": "RSI",
+          "period": 14,
+          "condition": "< 44",
+          "rationale": "Use 44 (30th percentile) not 30 - occurs 30% vs 4.6% of time"
+        }
+      ]
+    },
+    "exit_conditions": { ... },
+    "risk_management": { ... },
+    "indicators_required": [...]
+  }
+  ```
+  The `logic` field contains the COMPLETE boolean expression that Code Generator translates directly.
 
 ### Strategy Types
 - `pure_technical`: Traditional indicator-based (RSI, EMA, MACD, etc.)
@@ -222,13 +278,27 @@ Configurable via `.env` or `config/quantopia.yaml`.
    cd simulated_exchange && pip install -e . && cd ..
    ```
 
-2. **LLM API failures**: Check `.env` has valid API keys and correct `LLM_PROVIDER` setting
+2. **LLM API failures**:
+   - Check `.env` has valid API keys and correct `LLM_PROVIDER` setting
+   - For Azure OpenAI, ensure `AZURE_OPENAI_MODEL` matches deployment name (e.g., "gpt-4.1" not "gpt-4")
+   - Use `dotenv` to load `.env` in test scripts: `from dotenv import load_dotenv; load_dotenv()`
 
 3. **Database locked**: Close any other processes accessing `data/strategies.db`
 
 4. **Slow backtests**: The `BaseStrategy` pre-calculates indicators on full dataset for O(n) performance vs O(n²) bar-by-bar recalculation
 
 5. **Generated code errors**: Code Generator uses temperature=0.2 for deterministic output. Check `src/code_generation/code_generator.py` for templates.
+
+6. **Strategies with 0 trades** (RESOLVED in commit 5cee7f6):
+   - **Root Cause**: Code Generator was adding extra AND conditions and using unrealistic thresholds (RSI < 30 instead of < 44)
+   - **Solution**: Strategy Agent now outputs complete logic specifications, Code Generator faithfully translates without interpretation
+   - **Diagnostic**: Run `python scratchpad/diagnose_zero_trades.py` to analyze strategies
+   - **Expected**: Should see <20% zero-trade strategies with calibrated thresholds
+
+7. **Database errors with indicator format**:
+   - `get_underexplored_areas()` in `src/database/manager.py:971` may fail if indicators stored as dicts instead of strings
+   - Temporary workaround: Skip unhashable indicators in analysis
+   - Long-term fix: Standardize indicator storage format in database schema
 
 ### Logging
 - Default level: INFO
