@@ -262,6 +262,7 @@ class ResearchOrchestrator:
 
             refinement_results = self._refine_failures(
                 rejected_strategies=rejected,
+                original_strategies=strategies,
                 backtest_results=backtest_results,
                 data=data,
                 symbol=symbol
@@ -278,6 +279,7 @@ class ResearchOrchestrator:
 
             family_results = self._generate_families(
                 approved_strategies=approved,
+                original_strategies=strategies,
                 backtest_results=backtest_results,
                 data=data,
                 symbol=symbol
@@ -295,7 +297,8 @@ class ResearchOrchestrator:
                 strategies=strategies,
                 codes=strategy_codes,
                 backtest_results=backtest_results,
-                portfolio_eval=portfolio_eval if approved else None
+                portfolio_eval=portfolio_eval if approved else None,
+                symbol=symbol
             )
 
             report.database_stored = True
@@ -320,7 +323,7 @@ class ResearchOrchestrator:
         avoid_similar = []
         if self.database:
             recent = self.database.get_recent_strategies(limit=50)
-            avoid_similar = [s.to_dict() for s in recent]
+            avoid_similar = recent  # Already returns dictionaries
 
         for i in range(batch_size):
             try:
@@ -452,6 +455,7 @@ class ResearchOrchestrator:
     def _refine_failures(
         self,
         rejected_strategies: List[Any],
+        original_strategies: List[Dict[str, Any]],
         backtest_results: List[Dict[str, Any]],
         data: pd.DataFrame,
         symbol: str
@@ -473,20 +477,31 @@ class ResearchOrchestrator:
                 logger.info(f"  Reasons: {', '.join(filter_result.rejection_reasons)}")
 
                 # Get original strategy metadata
-                original_result = next(
+                original_strategy = next(
+                    (s for s in original_strategies if s['strategy_name'] == strategy_name),
+                    None
+                )
+
+                if not original_strategy:
+                    logger.warning(f"Could not find original strategy for {strategy_name}")
+                    continue
+
+                # Get backtest results for context
+                backtest_result = next(
                     (r for r in backtest_results if r['strategy_name'] == strategy_name),
                     None
                 )
 
-                if not original_result:
-                    logger.warning(f"Could not find original result for {strategy_name}")
-                    continue
-
                 # Generate refined version
+                # Build failure analysis from rejection reasons
+                failure_analysis = "Failure Reasons:\n" + "\n".join(
+                    f"- {reason}" for reason in filter_result.rejection_reasons
+                )
+
                 refined_strategy = self.strategy_generator.refine_strategy(
-                    original_strategy=original_result.get('strategy_metadata', {}),
-                    failure_reasons=filter_result.rejection_reasons,
-                    backtest_metrics=filter_result.metrics_summary
+                    failed_strategy=original_strategy,
+                    backtest_results=backtest_result or {},
+                    failure_analysis=failure_analysis
                 )
 
                 # Generate code and test
@@ -524,6 +539,7 @@ class ResearchOrchestrator:
     def _generate_families(
         self,
         approved_strategies: List[Any],
+        original_strategies: List[Dict[str, Any]],
         backtest_results: List[Dict[str, Any]],
         data: pd.DataFrame,
         symbol: str
@@ -541,17 +557,18 @@ class ResearchOrchestrator:
                 logger.info(f"Generating family from: {strategy_name}")
 
                 # Get original strategy metadata
-                original_result = next(
-                    (r for r in backtest_results if r['strategy_name'] == strategy_name),
+                original_strategy = next(
+                    (s for s in original_strategies if s['strategy_name'] == strategy_name),
                     None
                 )
 
-                if not original_result:
+                if not original_strategy:
+                    logger.warning(f"Could not find original strategy for {strategy_name}")
                     continue
 
                 # Generate family variants
                 family = self.strategy_generator.generate_strategy_family(
-                    parent_strategy=original_result.get('strategy_metadata', {}),
+                    parent_strategy=original_strategy,
                     num_variants=self.strategy_family_size
                 )
 
@@ -597,7 +614,8 @@ class ResearchOrchestrator:
         strategies: List[Dict[str, Any]],
         codes: List[str],
         backtest_results: List[Dict[str, Any]],
-        portfolio_eval: Optional[Dict[str, Any]]
+        portfolio_eval: Optional[Dict[str, Any]],
+        symbol: str
     ):
         """Store all iteration results to database."""
         if not self.database:
@@ -609,17 +627,39 @@ class ResearchOrchestrator:
                 if i < len(codes) and i < len(backtest_results):
                     result = backtest_results[i]
 
-                    # Store strategy
+                    # Store strategy with proper field extraction
                     strategy_id = self.database.store_strategy(
-                        strategy_metadata=strategy,
-                        code=codes[i]
+                        name=strategy.get('strategy_name', f'Strategy_{i}'),
+                        strategy_type=strategy.get('strategy_type', 'unknown'),
+                        indicators=strategy.get('indicators', []),
+                        description=strategy.get('hypothesis', ''),
+                        parameters=strategy.get('parameters', {}),
+                        ml_strategy_type=strategy.get('ml_strategy_type', 'pure_technical'),
+                        ml_models_used=strategy.get('ml_models_used', [])
                     )
 
-                    # Store backtest result
-                    self.database.store_backtest_results(
+                    # Store strategy code separately
+                    self.database.store_strategy_code(
                         strategy_id=strategy_id,
-                        results=result
+                        code_text=codes[i],
+                        validation_status='valid'
                     )
+
+                    # Store backtest result (extract fields from result dict)
+                    if result.get('status') == 'success':
+                        self.database.store_backtest_results(
+                            strategy_id=strategy_id,
+                            symbol=result.get('symbol', symbol),
+                            timeframe='1h',  # Default from config
+                            start_date=result.get('start_date'),
+                            end_date=result.get('end_date'),
+                            initial_capital=result.get('initial_capital', self.batch_tester.runner.initial_capital),
+                            metrics=result.get('metrics', {}),
+                            equity_curve=result.get('equity_curve', {}).to_dict('records') if isinstance(result.get('equity_curve'), pd.DataFrame) else None,
+                            passed_filters=False,  # Will be updated after filtering
+                            filter_category=None,
+                            rejection_reasons=None
+                        )
 
             # Store portfolio evaluation
             if portfolio_eval:
