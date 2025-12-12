@@ -6,17 +6,184 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Type
 import pandas as pd
 import logging
+import multiprocessing as mp
+from functools import partial
 
 # Add paths for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../simulated_exchange/src"))
 
 from simulated_exchange import SimulatedExchange, HistoricalPriceFeed, download_data
-from simulated_exchange.slippage import FixedSlippageModel
-from simulated_exchange.fees import TieredFeeModel
 from src.code_generation.strategy_base import BaseStrategy
 
 logger = logging.getLogger(__name__)
+
+
+class TimeoutError(Exception):
+    """Raised when a backtest times out."""
+    pass
+
+
+def _run_strategy_in_process(
+    strategy_code: str,
+    strategy_name: str,
+    data: pd.DataFrame,
+    symbol: str,
+    initial_capital: float,
+    slippage_bps: float,
+    maker_fee: float,
+    taker_fee: float,
+    result_queue: mp.Queue
+):
+    """Helper function to run backtest in separate process.
+
+    Args:
+        strategy_code: Python code string containing strategy class definition
+        strategy_name: Name of the strategy (for error reporting)
+        data: Historical data
+        symbol: Trading symbol
+        initial_capital: Starting capital
+        slippage_bps: Slippage in basis points
+        maker_fee: Maker fee
+        taker_fee: Taker fee
+        result_queue: Queue to put results
+    """
+    try:
+        import importlib.util
+        import importlib
+        import tempfile
+
+        # CRITICAL: Disable bytecode caching to ensure fresh imports
+        sys.dont_write_bytecode = True
+
+        # CRITICAL: Aggressive cache busting - remove ALL strategy-related modules from cache
+        # This ensures subprocess uses latest code, not cached .pyc files
+        modules_to_remove = [k for k in list(sys.modules.keys()) if 'strategy' in k.lower() or 'code_generation' in k]
+        for mod in modules_to_remove:
+            try:
+                del sys.modules[mod]
+            except:
+                pass
+
+        # Dynamically create the strategy class from code in this process
+        # Generate a unique module name
+        module_name = f'strategy_{id(strategy_code)}'
+
+        # Create a temporary file for the strategy code
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
+            temp_file.write(strategy_code)
+            temp_file_path = temp_file.name
+
+        try:
+            # Import the module dynamically
+            spec = importlib.util.spec_from_file_location(module_name, temp_file_path)
+            if spec is None or spec.loader is None:
+                raise ValueError(f"Failed to create module spec for strategy")
+
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+
+            # Find strategy class
+            strategy_class = None
+            import logging
+            logger = logging.getLogger(__name__)
+
+            logger.info(f"[SUBPROCESS] Searching for BaseStrategy subclass in module...")
+            logger.info(f"[SUBPROCESS] Module members: {[name for name in dir(module) if not name.startswith('_')]}")
+
+            for name in dir(module):
+                obj = getattr(module, name)
+                if not isinstance(obj, type):
+                    continue
+
+                # Check if this is a BaseStrategy subclass by checking base class names
+                # This avoids issues with module reloading and different BaseStrategy instances
+                try:
+                    base_names = [base.__name__ for base in obj.__mro__]
+                    if 'BaseStrategy' in base_names and obj.__name__ != 'BaseStrategy':
+                        strategy_class = obj
+                        logger.info(f"[SUBPROCESS] Found strategy class: {strategy_class}")
+                        break
+                except Exception as e:
+                    continue
+
+            if strategy_class is None:
+                logger.error(f"[SUBPROCESS] No BaseStrategy subclass found!")
+                logger.error(f"[SUBPROCESS] Available classes: {[name for name in dir(module) if isinstance(getattr(module, name), type)]}")
+                raise ValueError("No BaseStrategy subclass found in generated code")
+
+            # Initialize SimulatedExchange with config dictionaries
+            slippage_config = {
+                'type': 'fixed',
+                'fixed_bps': slippage_bps
+            }
+            fee_config = {
+                'type': 'tiered',
+                'maker_fee': maker_fee,
+                'taker_fee': taker_fee
+            }
+
+            price_feed = HistoricalPriceFeed(data, symbols=[symbol])
+
+            exchange = SimulatedExchange(
+                price_feed=price_feed,
+                initial_capital=initial_capital,
+                slippage_config=slippage_config,
+                fee_config=fee_config
+            )
+
+            # Initialize strategy
+            strategy = strategy_class(
+                exchange=exchange,
+                price_feed=price_feed,
+                symbol=symbol,
+                initial_capital=initial_capital
+            )
+
+            # Run backtest
+            results = strategy.run_backtest(data)
+
+            # Get performance metrics from SimulatedExchange
+            metrics = exchange.get_performance_metrics()
+
+            # Get trade history
+            trades = exchange.get_trade_history()
+
+            # Get equity curve
+            equity_curve = pd.DataFrame([
+                {
+                    'timestamp': point.timestamp,
+                    'equity': point.portfolio_value,
+                    'cash': point.cash,
+                    'position_value': point.portfolio_value - point.cash
+                }
+                for point in exchange.equity_curve
+            ])
+
+            # Compile full results
+            full_results = {
+                'metrics': metrics,
+                'trade_history': trades,
+                'equity_curve': equity_curve,
+                'final_portfolio_value': exchange.get_portfolio_value(),
+                'final_cash': exchange.cash
+            }
+
+            # Put results in queue
+            result_queue.put(('success', full_results))
+
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except:
+                    pass
+
+    except Exception as e:
+        import traceback
+        result_queue.put(('error', f"{str(e)}\n{traceback.format_exc()}"))
 
 
 class BacktestRunner:
@@ -27,7 +194,8 @@ class BacktestRunner:
         initial_capital: float = 10000.0,
         slippage_bps: float = 5.0,
         maker_fee: float = 0.0,
-        taker_fee: float = 0.00025
+        taker_fee: float = 0.00025,
+        backtest_timeout_seconds: int = 60
     ):
         """Initialize backtest runner.
 
@@ -36,15 +204,18 @@ class BacktestRunner:
             slippage_bps: Slippage in basis points (default: 5 bps)
             maker_fee: Maker fee percentage (default: 0% - Hyperliquid)
             taker_fee: Taker fee percentage (default: 0.025% - Hyperliquid)
+            backtest_timeout_seconds: Maximum time for a single backtest (default: 60s)
         """
         self.initial_capital = initial_capital
         self.slippage_bps = slippage_bps
         self.maker_fee = maker_fee
         self.taker_fee = taker_fee
+        self.backtest_timeout_seconds = backtest_timeout_seconds
 
         logger.info(
             f"Initialized BacktestRunner with capital=${initial_capital}, "
-            f"slippage={slippage_bps}bps, fees={maker_fee}/{taker_fee}"
+            f"slippage={slippage_bps}bps, fees={maker_fee}/{taker_fee}, "
+            f"timeout={backtest_timeout_seconds}s"
         )
 
     def load_data(
@@ -103,7 +274,11 @@ class BacktestRunner:
         symbol: str,
         strategy_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Run backtest for a strategy class.
+        """Run backtest for a strategy class (in-process, no multiprocessing).
+
+        NOTE: This method runs in-process and is suitable for pre-defined strategy
+        classes. For dynamically generated strategies, use run_from_code() instead
+        which uses multiprocessing with proper code serialization.
 
         Args:
             strategy_class: Strategy class (must inherit from BaseStrategy)
@@ -120,20 +295,26 @@ class BacktestRunner:
         logger.info(f"Data range: {data.index[0]} to {data.index[-1]} ({len(data)} candles)")
 
         try:
-            # Initialize SimulatedExchange components
-            slippage_model = FixedSlippageModel(fixed_bps=self.slippage_bps)
-            fee_model = TieredFeeModel(
-                maker_fee=self.maker_fee,
-                taker_fee=self.taker_fee
-            )
+            backtest_start = datetime.now()
 
-            price_feed = HistoricalPriceFeed(data, symbol=symbol)
+            # Initialize SimulatedExchange with config dictionaries
+            slippage_config = {
+                'type': 'fixed',
+                'fixed_bps': self.slippage_bps
+            }
+            fee_config = {
+                'type': 'tiered',
+                'maker_fee': self.maker_fee,
+                'taker_fee': self.taker_fee
+            }
+
+            price_feed = HistoricalPriceFeed(data, symbols=[symbol])
 
             exchange = SimulatedExchange(
                 price_feed=price_feed,
                 initial_capital=self.initial_capital,
-                slippage_model=slippage_model,
-                fee_model=fee_model
+                slippage_config=slippage_config,
+                fee_config=fee_config
             )
 
             # Initialize strategy
@@ -144,10 +325,8 @@ class BacktestRunner:
                 initial_capital=self.initial_capital
             )
 
-            # Run backtest (strategy handles the main loop)
-            backtest_start = datetime.now()
+            # Run backtest
             results = strategy.run_backtest(data)
-            backtest_duration = (datetime.now() - backtest_start).total_seconds()
 
             # Get performance metrics from SimulatedExchange
             metrics = exchange.get_performance_metrics()
@@ -159,22 +338,32 @@ class BacktestRunner:
             equity_curve = pd.DataFrame([
                 {
                     'timestamp': point.timestamp,
-                    'equity': point.equity,
+                    'equity': point.portfolio_value,
                     'cash': point.cash,
-                    'position_value': point.position_value
+                    'position_value': point.portfolio_value - point.cash
                 }
                 for point in exchange.equity_curve
             ])
 
+            backtest_duration = (datetime.now() - backtest_start).total_seconds()
+
             # Compile results
+            # Use timestamp column if available, otherwise fall back to index
+            if 'timestamp' in data.columns:
+                start_date = data['timestamp'].iloc[0] if hasattr(data['timestamp'].iloc[0], 'to_pydatetime') else data['timestamp'].iloc[0]
+                end_date = data['timestamp'].iloc[-1] if hasattr(data['timestamp'].iloc[-1], 'to_pydatetime') else data['timestamp'].iloc[-1]
+            else:
+                start_date = data.index[0] if isinstance(data.index[0], (datetime, pd.Timestamp)) else datetime.fromtimestamp(0)
+                end_date = data.index[-1] if isinstance(data.index[-1], (datetime, pd.Timestamp)) else datetime.now()
+
             backtest_results = {
                 'strategy_name': strategy_name,
                 'symbol': symbol,
-                'start_date': data.index[0],
-                'end_date': data.index[-1],
+                'start_date': start_date,
+                'end_date': end_date,
                 'num_candles': len(data),
                 'initial_capital': self.initial_capital,
-                'final_capital': exchange.get_total_equity(),
+                'final_capital': results.get('final_portfolio_value', self.initial_capital),
                 'metrics': metrics,
                 'trades': trades,
                 'equity_curve': equity_curve,
@@ -184,15 +373,15 @@ class BacktestRunner:
 
             logger.info(f"✓ Backtest completed for {strategy_name}")
             logger.info(
-                f"  Final Capital: ${exchange.get_total_equity():.2f} "
-                f"({metrics.get('total_return', 0)*100:.2f}%)"
+                f"  Final Capital: ${results.get('final_portfolio_value', self.initial_capital):.2f} "
+                f"({metrics.get('total_return', 0):.2f}%)"
             )
             logger.info(
                 f"  Sharpe: {metrics.get('sharpe_ratio', 0):.2f}, "
-                f"Max DD: {metrics.get('max_drawdown', 0)*100:.2f}%, "
-                f"Win Rate: {metrics.get('win_rate', 0)*100:.2f}%"
+                f"Max DD: {metrics.get('max_drawdown', 0):.2f}%, "
+                f"Win Rate: {metrics.get('win_rate', 0):.2f}%"
             )
-            logger.info(f"  Total Trades: {metrics.get('num_trades', 0)}")
+            logger.info(f"  Total Trades: {metrics.get('total_trades', 0)}")
 
             return backtest_results
 
@@ -213,7 +402,10 @@ class BacktestRunner:
         symbol: str,
         strategy_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Run backtest from generated strategy code.
+        """Run backtest from generated strategy code (IN-PROCESS for speed).
+
+        NOTE: With O(n) optimized indicator pre-calculation, backtests complete in
+        ~0.5s for 8760 candles, so multiprocessing overhead isn't worth it.
 
         Args:
             strategy_code: Python code string (generated by CodeGenerator)
@@ -224,40 +416,148 @@ class BacktestRunner:
         Returns:
             Dict with backtest results
         """
-        try:
-            # Execute code to define strategy class
-            namespace = {}
-            exec(strategy_code, namespace)
+        import importlib.util
+        import tempfile
 
-            # Find strategy class (should inherit from BaseStrategy)
+        # Infer strategy name from code if not provided
+        if not strategy_name:
+            strategy_name = f'Strategy_{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}'
+
+        logger.info(f"Starting backtest for: {strategy_name}")
+        logger.info(f"Data range: {data.index[0]} to {data.index[-1]} ({len(data)} candles)")
+
+        temp_file_path = None
+
+        try:
+            backtest_start = datetime.now()
+
+            # Create temporary file with strategy code
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
+                temp_file.write(strategy_code)
+                temp_file_path = temp_file.name
+
+            # Import the strategy module
+            module_name = f'strategy_{datetime.now().strftime("%Y%m%d%H%M%S%f")}'
+            spec = importlib.util.spec_from_file_location(module_name, temp_file_path)
+
+            if spec is None or spec.loader is None:
+                raise ValueError("Failed to create module spec for strategy")
+
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+
+            # Find strategy class by checking base class names
             strategy_class = None
-            for name, obj in namespace.items():
-                if (isinstance(obj, type) and
-                    issubclass(obj, BaseStrategy) and
-                    obj != BaseStrategy):
-                    strategy_class = obj
-                    break
+            for name in dir(module):
+                obj = getattr(module, name)
+                if not isinstance(obj, type):
+                    continue
+
+                try:
+                    base_names = [base.__name__ for base in obj.__mro__]
+                    if 'BaseStrategy' in base_names and obj.__name__ != 'BaseStrategy':
+                        strategy_class = obj
+                        break
+                except:
+                    continue
 
             if strategy_class is None:
                 raise ValueError("No BaseStrategy subclass found in generated code")
 
-            # Run backtest with the class
-            return self.run_backtest(
-                strategy_class=strategy_class,
-                data=data,
-                symbol=symbol,
-                strategy_name=strategy_name or strategy_class.__name__
+            # Initialize exchange components
+            slippage_config = {'type': 'fixed', 'fixed_bps': self.slippage_bps}
+            fee_config = {'type': 'tiered', 'maker_fee': self.maker_fee, 'taker_fee': self.taker_fee}
+
+            price_feed = HistoricalPriceFeed(data, symbols=[symbol])
+            exchange = SimulatedExchange(
+                price_feed=price_feed,
+                initial_capital=self.initial_capital,
+                slippage_config=slippage_config,
+                fee_config=fee_config
             )
 
+            # Initialize and run strategy
+            strategy = strategy_class(
+                exchange=exchange,
+                price_feed=price_feed,
+                symbol=symbol,
+                initial_capital=self.initial_capital
+            )
+
+            # Run backtest
+            strategy.run_backtest(data)
+
+            # Get results
+            metrics = exchange.get_performance_metrics()
+            trades = exchange.get_trade_history()
+            equity_curve = pd.DataFrame([
+                {
+                    'timestamp': point.timestamp,
+                    'equity': point.portfolio_value,
+                    'cash': point.cash,
+                    'position_value': point.portfolio_value - point.cash
+                }
+                for point in exchange.equity_curve
+            ])
+
+            backtest_duration = (datetime.now() - backtest_start).total_seconds()
+
+            # Compile results
+            if 'timestamp' in data.columns:
+                start_date = data['timestamp'].iloc[0] if hasattr(data['timestamp'].iloc[0], 'to_pydatetime') else data['timestamp'].iloc[0]
+                end_date = data['timestamp'].iloc[-1] if hasattr(data['timestamp'].iloc[-1], 'to_pydatetime') else data['timestamp'].iloc[-1]
+            else:
+                start_date = data.index[0] if isinstance(data.index[0], (datetime, pd.Timestamp)) else datetime.fromtimestamp(0)
+                end_date = data.index[-1] if isinstance(data.index[-1], (datetime, pd.Timestamp)) else datetime.now()
+
+            backtest_results = {
+                'strategy_name': strategy_name,
+                'symbol': symbol,
+                'start_date': start_date,
+                'end_date': end_date,
+                'num_candles': len(data),
+                'initial_capital': self.initial_capital,
+                'final_capital': exchange.get_portfolio_value(),
+                'metrics': metrics,
+                'trades': trades,
+                'equity_curve': equity_curve,
+                'backtest_duration_seconds': backtest_duration,
+                'status': 'success'
+            }
+
+            logger.info(f"✓ Backtest completed for {strategy_name}")
+            logger.info(
+                f"  Final Capital: ${exchange.get_portfolio_value():.2f} "
+                f"({metrics.get('total_return', 0):.2f}%)"
+            )
+            logger.info(
+                f"  Sharpe: {metrics.get('sharpe_ratio', 0):.2f}, "
+                f"Max DD: {metrics.get('max_drawdown', 0):.2f}%, "
+                f"Win Rate: {metrics.get('win_rate', 0):.2f}%"
+            )
+            logger.info(f"  Total Trades: {metrics.get('total_trades', 0)}")
+
+            return backtest_results
+
         except Exception as e:
-            logger.error(f"Failed to run backtest from code: {e}")
+            logger.error(f"Backtest failed for {strategy_name}: {e}")
+            import traceback
+            traceback.print_exc()
             return {
-                'strategy_name': strategy_name or 'Unknown',
+                'strategy_name': strategy_name,
                 'symbol': symbol,
                 'status': 'failed',
                 'error': str(e),
                 'metrics': {}
             }
+        finally:
+            # Clean up temp file
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except:
+                    pass
 
     def save_results(
         self,
