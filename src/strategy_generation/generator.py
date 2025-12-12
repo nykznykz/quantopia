@@ -237,7 +237,8 @@ class StrategyGenerator:
                 )
 
                 # Parse and validate
-                refined_strategy = self.parser.parse(str(response_json))
+                import json as json_module
+                refined_strategy = self.parser.parse(json_module.dumps(response_json))
 
                 # Add metadata
                 refined_strategy['parent_strategy'] = failed_strategy['strategy_name']
@@ -320,7 +321,8 @@ class StrategyGenerator:
             )
 
             # Parse batch
-            variations = self.parser.parse_batch(str(response_json))
+            import json as json_module
+            variations = self.parser.parse_batch(json_module.dumps(response_json))
 
             # Add metadata and store in database
             parent_id = base_strategy.get('db_id')

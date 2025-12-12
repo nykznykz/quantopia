@@ -119,7 +119,7 @@ class StrategyFilter:
         max_drawdown = abs(metrics.get('max_drawdown', 0))
         win_rate = metrics.get('win_rate', 0)
         profit_factor = metrics.get('profit_factor', 0)
-        num_trades = metrics.get('num_trades', 0)
+        num_trades = metrics.get('total_trades', 0)
 
         # Apply filters
         if total_return < self.criteria.min_total_return:
