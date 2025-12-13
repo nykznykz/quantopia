@@ -15,7 +15,7 @@ Quantopia is an **agent-first** quantitative research platform that combines LLM
 ### Key Differentiators
 
 - 🤖 **Autonomous Strategy Agent**: LLM-based agent that analyzes database history, identifies underexplored areas, and decides what to try next
-- 📊 **Market-Calibrated Thresholds**: Uses real market statistics (e.g., RSI < 44 vs textbook RSI < 30) for realistic signal generation
+- 🧠 **Self-Learning from Failures**: Agent sees "RSI < 20 → 0 trades" in database, autonomously tries "RSI < 40" next iteration (market statistics are temporary training wheels)
 - 🔬 **Database-Driven Learning**: All strategies, results, and ML models stored in SQLite for agent learning and genealogy tracking
 - ⚡ **Production-Grade Backtesting**: Realistic slippage models (volume-based, volatility-adjusted), proper fee modeling, O(n) optimized indicators
 - 🧬 **Strategy Genealogy**: Track parent/child relationships, generations, and refinement lineage
@@ -119,7 +119,7 @@ This separation prevents overly restrictive strategies caused by components addi
 - ✅ **Database System**: SQLite-based storage with genealogy tracking
 - ✅ **Portfolio Risk Manager**: Marginal risk contribution, diversification ratio, correlation analysis
 - ✅ **Portfolio Evaluator**: Multi-strategy orchestration and allocation optimization
-- ✅ **Market Statistics**: Calibrated thresholds from historical data analysis
+- ✅ **Market Statistics** (Temporary Aid): Pre-computed statistics help initial parameter selection while Critique Agent is pending
 
 ### Backtesting Engine (Production-Quality)
 
@@ -140,9 +140,9 @@ This separation prevents overly restrictive strategies caused by components addi
 ### Pending (Phase 2-4)
 
 - ⏳ **Walk-Forward Testing**: Out-of-sample validation (CRITICAL - see roadmap)
+- ⏳ **Critique Agent** (Core Vision): Autonomous learning loop where agent analyzes failures (e.g., "0 trades from RSI < 20") and proposes refined strategies (e.g., "try RSI < 40") without human intervention
 - ⏳ **Paper Trading**: Real-time validation with live data
 - ⏳ **Live Trading Engine**: Actual deployment with safety limits
-- ⏳ **Critique Agent**: Failure analysis and refinement suggestions
 - ⏳ **Divergence Tracking**: Compare live vs backtest performance
 
 ---
@@ -505,6 +505,7 @@ model_stats = model_registry.get_model_usage_statistics()
 ### Phase 2 (Critical - Next 3 Months) 🔴
 See `docs/ROADMAP_RETAIL_FOCUSED.md` for details:
 - ⏳ **Walk-Forward Testing** (CRITICAL - prevents overfitting)
+- ⏳ **Critique Agent** (Core Vision - autonomous learning from failures)
 - ⏳ **Complete ML Training Loop** (currently mocked)
 - ⏳ **Parameter Stability Testing**
 - ⏳ **Monte Carlo Drawdown Analysis**

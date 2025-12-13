@@ -5,11 +5,12 @@
 | Feature | Effort | Impact | Why Critical |
 |---------|--------|--------|--------------|
 | **Walk-Forward Testing** | 2-3 weeks | ⭐⭐⭐⭐⭐ | Prevents overfitting - single biggest improvement |
+| **Critique Agent** (Core Vision) | 3-4 weeks | ⭐⭐⭐⭐⭐ | Autonomous learning from failures - sees "RSI < 20 → 0 trades", tries "RSI < 40" next |
 | **Complete ML Training Loop** | 2-3 weeks | ⭐⭐⭐⭐⭐ | Enables autonomous ML strategies (currently mocked) |
 | **Parameter Stability Testing** | 1 week | ⭐⭐⭐⭐ | Prevents fragile curve-fitted strategies |
 | **Monte Carlo Drawdown** | 1 week | ⭐⭐⭐⭐ | Realistic risk assessment vs lucky backtests |
 
-**Success Metric:** Out-of-sample Sharpe >50% of in-sample Sharpe
+**Success Metric:** Out-of-sample Sharpe >50% of in-sample Sharpe + Autonomous refinements improve >50% of failed strategies
 
 ---
 
@@ -151,26 +152,47 @@ Month 16-18: Performance optimization + Polish
 # Reject strategies with >50% Sharpe degradation
 ```
 
-### Week 5-6: Complete ML Training
+### Week 5-8: Critique Agent (Core Vision)
+```python
+# Week 5: Create src/critique/critique_agent.py
+# - Build failure analysis (0 trades, low win rate, etc.)
+# - LLM prompts for diagnosing failure patterns
+
+# Week 6: Implement refinement suggestions
+# - Generate parameter adjustments (RSI < 20 → RSI < 40)
+# - Create child strategies with parent_id linkage
+
+# Week 7: Integration with Research Orchestrator
+# - Auto-refine rejected strategies
+# - Queue refinements for testing
+# - Track genealogy (generation counter)
+
+# Week 8: Test autonomous learning loop
+# - Generate 50 strategies → analyze failures → refine
+# - Measure: Do refinements perform better than originals?
+# - Success: >50% of refinements improve on parent strategy
+```
+
+### Week 9-10: Complete ML Training
 ```python
 # Fix src/agents/ml_quant_agent.py:373-417
 # Replace mock metrics with real ModelTrainer calls
 # Test autonomous ML strategy generation
 ```
 
-### Week 7: Monte Carlo Drawdown
+### Week 11: Monte Carlo Drawdown
 ```python
 # Create src/validation/monte_carlo.py
 # Shuffle trade order, measure 95th percentile DD
 # Add to strategy evaluation criteria
 ```
 
-### Week 8: Integration & Testing
+### Week 12: Integration & Testing
 ```python
-# Run full autonomous research session
+# Run full autonomous research session with Critique Agent
 # Generate 50 strategies with walk-forward validation
 # Compare in-sample vs out-of-sample metrics
-# Document performance degradation patterns
+# Verify autonomous refinement loop works
 ```
 
 ---
@@ -180,6 +202,9 @@ Month 16-18: Performance optimization + Polish
 ### Phase 1 (Months 1-3):
 - [ ] Walk-forward testing integrated into ResearchEngine
 - [ ] 80%+ strategies have out-of-sample Sharpe >50% of in-sample
+- [ ] **Critique Agent fully functional** - autonomous refinement loop working
+- [ ] >50% of refinements improve on parent strategy (autonomous learning validated)
+- [ ] Genealogy tracking shows multi-generation improvements
 - [ ] <20% strategies flagged as parameter-fragile
 - [ ] ML models train autonomously with real data
 - [ ] Monte Carlo DD calculated for all strategies

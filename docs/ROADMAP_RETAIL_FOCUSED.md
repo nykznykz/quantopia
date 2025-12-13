@@ -134,15 +134,180 @@ def monte_carlo_drawdown(trade_history, num_simulations=1000):
 
 ---
 
-## Phase 2: Complete ML Training Loop (Months 2-4) 🟡 HIGH PRIORITY
+## Phase 2: Autonomous Learning Loop (Months 2-4) 🔴 CRITICAL PRIORITY
 
-### **Current State:**
-ML infrastructure is 80% done, but training is **mocked** in `ml_quant_agent.py:373-417`.
+### **Vision Statement:**
+The core vision of Quantopia is **fully autonomous learning**. The agent should see "RSI < 20 → 0 trades" in the database and autonomously decide to try "RSI < 40" in the next iteration—without human intervention or hardcoded thresholds.
 
-### 2.1 Activate Real ML Training ⭐⭐⭐⭐⭐
+**Current State:** Market statistics (`scratchpad/market_statistics.json`) are a **temporary stopgap** to help the agent make better initial guesses. The end goal is to remove this dependency entirely and rely on the Critique Agent's autonomous learning.
+
+---
+
+### 2.1 Critique Agent (Autonomous Learning) ⭐⭐⭐⭐⭐
+**Priority:** CRITICAL (Core Vision)
+**Effort:** 3-4 weeks
+**Impact:** Enables true autonomous research without human guidance
+
+**What to Build:**
+```python
+# src/critique/critique_agent.py
+
+class CritiqueAgent:
+    """
+    Analyzes failed/underperforming strategies and suggests refinements.
+
+    This is the CORE of autonomous learning - the agent learns from failures
+    without hardcoded rules or pre-computed statistics.
+    """
+
+    def __init__(self, database, llm_client):
+        self.database = database
+        self.llm_client = llm_client
+
+    def analyze_failure(self, strategy_id):
+        """
+        Analyze why a strategy failed.
+
+        Example failure patterns:
+        - 0 trades: Entry conditions too restrictive
+        - Low win rate: Exit conditions too tight
+        - High drawdown: No stop loss or position sizing issues
+        - Too many trades: Entry conditions too loose
+        """
+
+        strategy = self.database.get_strategy(strategy_id)
+        backtest = self.database.get_backtest_results(strategy_id)
+
+        # Build context for LLM
+        context = {
+            'strategy_type': strategy['strategy_type'],
+            'entry_conditions': strategy['entry_rules'],
+            'exit_conditions': strategy['exit_rules'],
+            'indicators': strategy['indicators'],
+            'num_trades': backtest['metrics']['num_trades'],
+            'sharpe': backtest['metrics']['sharpe_ratio'],
+            'win_rate': backtest['metrics']['win_rate'],
+            'max_dd': backtest['metrics']['max_drawdown']
+        }
+
+        # Get LLM analysis
+        analysis = self._get_llm_analysis(context)
+
+        return analysis
+
+    def suggest_refinements(self, strategy_id):
+        """
+        Generate refined strategy variations based on failure analysis.
+
+        Example refinements:
+        - RSI < 20 → 0 trades → Try RSI < 40 (relax threshold)
+        - Too many trades → Try adding TrendStrength > 0.5 (add filter)
+        - Low win rate → Try wider stop loss (adjust exit)
+        """
+
+        analysis = self.analyze_failure(strategy_id)
+
+        prompt = f"""
+        Strategy failed with this analysis:
+        {analysis}
+
+        Suggest 3 refinement variations:
+        1. Relax entry conditions (if 0 trades)
+        2. Add additional filters (if too many trades)
+        3. Adjust exit strategy (if low win rate)
+
+        For each refinement, provide:
+        - What to change and why
+        - Expected improvement
+        - New parameter values (e.g., RSI < 40 instead of < 20)
+        """
+
+        refinements = self.llm_client.complete(prompt)
+
+        return refinements
+
+    def _get_llm_analysis(self, context):
+        """Ask LLM to analyze failure pattern"""
+
+        prompt = f"""
+        Analyze why this strategy underperformed:
+
+        Strategy: {context['strategy_type']}
+        Entry: {context['entry_conditions']}
+        Exit: {context['exit_conditions']}
+
+        Results:
+        - Trades: {context['num_trades']}
+        - Sharpe: {context['sharpe']:.2f}
+        - Win Rate: {context['win_rate']:.1%}
+        - Max DD: {context['max_dd']:.1%}
+
+        Identify the root cause:
+        - If trades = 0: Entry conditions too restrictive
+        - If trades < 5: Still too restrictive
+        - If win_rate < 30%: Poor entry timing or exit too tight
+        - If max_dd > 30%: No risk management
+        - If sharpe < 0.5: Strategy doesn't have edge
+
+        Provide specific diagnosis with parameter recommendations.
+        """
+
+        analysis = self.llm_client.complete(prompt)
+        return analysis
+```
+
+**Key Features:**
+1. **Failure Pattern Recognition**: Identifies why strategies fail (0 trades, low win rate, etc.)
+2. **Autonomous Refinement**: Suggests parameter adjustments without hardcoded rules
+3. **Learning from Database**: Queries similar past failures to learn what worked
+4. **Genealogy Tracking**: Creates child strategies with parent_id linkage
+
+**Success Metrics:**
+- Agent sees 10 strategies with 0 trades → generates refinements with 20+ trades
+- Win rate improvements: Failed strategy 25% → Refined strategy 40%+
+- Autonomous learning: Each generation performs better than previous (on average)
+
+**Implementation Phases:**
+1. **Week 1**: Build failure analysis (classify failure types)
+2. **Week 2**: Implement refinement suggestions (parameter adjustments)
+3. **Week 3**: Integrate with Research Orchestrator (auto-refine rejected strategies)
+4. **Week 4**: Test autonomous learning loop (50 strategies → 50 refinements → measure improvement)
+
+**Integration:**
+```python
+# In src/orchestrator/research_engine.py Phase 6:
+
+# After strategy rejection
+if filter_result.rejected:
+    # Critique Agent analyzes failure
+    analysis = self.critique_agent.analyze_failure(strategy_id)
+
+    # Generate refinements
+    refinements = self.critique_agent.suggest_refinements(strategy_id)
+
+    # Queue refinements for testing
+    for refinement in refinements:
+        self.database.store_strategy(
+            name=f"{strategy.name}_refined_v{i}",
+            parent_id=strategy_id,
+            generation=strategy.generation + 1,
+            refinement_type='critique_refinement',
+            **refinement
+        )
+```
+
+**This Replaces Market Statistics:**
+Once the Critique Agent works, `scratchpad/market_statistics.json` becomes optional training data, not a hard requirement. The agent learns from its own failures instead.
+
+---
+
+### 2.2 Complete ML Training Loop ⭐⭐⭐⭐⭐
 **Priority:** CRITICAL
 **Effort:** 2-3 weeks
 **Impact:** Enables autonomous ML strategy discovery
+
+**Current State:**
+ML infrastructure is 80% done, but training is **mocked** in `ml_quant_agent.py:373-417`.
 
 **What to Fix:**
 Replace this in `src/agents/ml_quant_agent.py`:
